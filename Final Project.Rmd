@@ -1,0 +1,517 @@
+---
+title: "Nikolas Argiropoulos 20260509"
+author: "STT6516 - Hiver 2024"
+date: "Projet Final"
+output:
+  pdf_document: default
+  word_document: default
+---
+
+### Data Cleaning
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+#install.packages = c("ggplot2","lme4","ordinal","crosstable", "GGally", "reshape2",
+#              "tidyverse","broom", "lattice", "lmtest", "brant","gtsummary",
+#             "ggeffects", "MASS", "psych")
+
+
+packages = c("ggplot2","lme4","ordinal","crosstable", "GGally", "reshape2",
+             "tidyverse","broom", "lattice", "lmtest", "brant","gtsummary",
+             "ggeffects", "MASS", "psych")
+lapply(packages, require, character.only = TRUE)#Loading all required packages
+
+
+#Data cleaning
+data = read.csv("Data.csv") #importing data
+
+#Keeping variables of interest
+data = subset(data, select = c(tumorsize, ntumors, Sex, Age, LengthofStay, 
+                               pain, DID, CancerStage))
+
+#median split for logistic regression
+data$bin_pain = ifelse(data$pain >= 5, "Pain", "No Pain")
+
+#recoding pain variable from a 9 point scale to a 4 point scale for convergence
+
+breaks_4 = c(0.5, 2.5, 4.5, 7.5, 9.5)
+
+# Define labels for the intervals
+labels_4 =  c("None", "Mild", "Moderate", "Severe")
+
+#Recode the original variable into a new variable with values
+pain_4cate = cut(data$pain, breaks = breaks_4, labels = labels_4, 
+                 include.lowest = TRUE)
+
+#adding new variables to data frame
+data$pain_4cate = as.factor(pain_4cate)
+
+#log transform to rescale to help convergence
+
+data$lntumorsize = log(data$tumorsize) 
+data$lnntumors = log(1 + data$ntumors)
+data$lnAge = log(data$Age)
+
+#Standardizing the variables to help with convergence
+data$s_tumorsize = as.numeric(scale(data$tumorsize, center = TRUE, scale = TRUE))
+data$s_ntumors = as.numeric(scale(data$ntumors, center = TRUE, scale = TRUE))
+data$s_age = as.numeric(scale(data$Age, center = TRUE, scale = TRUE))
+#Converting variables to factor
+data$DID = as.factor(data$DID)
+#data$CancerStage = as.factor(data$CancerStage)
+#data$LengthofStay = as.factor(data$LengthofStay)
+#data$Sex = as.factor(data$Sex)
+#data$pain = as.factor(data$pain)
+data$bin_pain = as.factor(data$bin_pain)
+#data$ntumors = as.factor(data$ntumors)
+names(data)[names(data) == "Age"] <- "Age_original"
+names(data)[names(data) == "s_tumorsize"] <- "Tumor Size"
+names(data)[names(data) == "s_ntumors"] <- "Number of Tumors"
+names(data)[names(data) == "s_age"] <- "Age"
+names(data)[names(data) == "Sex"] <- "Sex"
+names(data)[names(data) == "CancerStage"] <- "Cancer Stage"
+
+attach(data)
+```
+
+### Descriptive Statistics
+
+```{r}
+describe(data)
+summary(data)
+
+data_sub = subset(data, select = c(Age_original, Sex, tumorsize, ntumors, 
+                                   LengthofStay, pain_4cate, bin_pain,
+                                   `Cancer Stage`))
+
+names(data_sub)[names(data_sub) == "Age_original"] = "Age"
+names(data_sub)[names(data_sub) == "tumorsize"] = "Tumor Size"
+names(data_sub)[names(data_sub) == "ntumors"] = "Number of Tumors"
+names(data_sub)[names(data_sub) == "pain_4cate"] = "Pain Category"
+names(data_sub)[names(data_sub) == "Sex"] = "Sex"
+names(data_sub)[names(data_sub) == "bin_pain"] = "Pain Binary"
+names(data_sub)[names(data_sub) == "LengthofStay"] = "Length of Stay"
+
+
+data_sub %>% tbl_summary(
+    by = 'Cancer Stage',
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    digits = all_continuous() ~ 2,
+    missing_text = "(Missing)")
+```
+
+### Mixed-Effects Ordinal Regression Analysis
+
+#### Model
+
+```{r}
+#Additive model
+model_ord_additive = clmm(pain_4cate ~ `Tumor Size`+`Number of Tumors`+Age+Sex+
+                            `Cancer Stage` + (1|DID), data = data, 
+                          nAGQ = 1, model=T, Hess=T, na.action=na.omit, 
+                          threshold="flexible", 
+                          control=clmm.control(grtol=1e-6))
+
+#Second order interaction model
+model_ord_sec = clmm(pain_4cate ~ (`Tumor Size`+`Number of Tumors`+Age+Sex+
+                                     `Cancer Stage`+ (1|DID))^2, 
+                     data = data, nAGQ = 1, model=T, Hess=T,
+                     na.action=na.omit,threshold="flexible", 
+                        control=clmm.control(grtol=1e-6))
+
+#Third order interaction model
+model_ord_third = clmm(pain_4cate ~ (`Tumor Size`+`Number of Tumors`+Age+Sex+
+                                       `Cancer Stage`+ (1|DID))^3, data = data, 
+                       nAGQ = 1, model=T, Hess=T, na.action=na.omit,
+                       threshold="flexible", control=clmm.control(grtol=1e-6))
+
+#Saturated model
+model_ord_saturated = clmm(pain_4cate ~ `Tumor Size`*`Number of Tumors`*Age*Sex*
+                             `Cancer Stage`+ (1|DID), data = data, nAGQ = 1, 
+                           model=T, Hess=T, na.action=na.omit, 
+                           threshold="flexible",
+                           control=clmm.control(grtol=1e-6))
+
+summary(model_ord_additive)
+summary(model_ord_sec)
+summary(model_ord_third)
+summary(model_ord_saturated)
+```
+
+#### Tables for each mixed-effect ordinal regression
+
+```{r}
+model_ord_additive %>%
+  tbl_regression(exponentiate = TRUE) %>%
+  bold_labels() %>%
+  italicize_levels() %>%
+  bold_p(t = 0.05)
+
+model_ord_sec %>%
+  tbl_regression(exponentiate = TRUE) %>%
+  bold_labels() %>%
+  italicize_levels() %>%
+  bold_p(t = 0.05)
+
+model_ord_third %>%
+  tbl_regression(exponentiate = TRUE) %>%
+  bold_labels() %>%
+  italicize_levels() %>%
+  bold_p(t = 0.05)
+
+model_ord_saturated %>%
+  tbl_regression(exponentiate = TRUE) %>%
+  bold_labels() %>%
+  italicize_levels() %>%
+  bold_p(t = 0.05)
+```
+
+#### Assumption Check
+
+#### Linearity of Continuous Predictors
+
+```{r}
+#Predict the probability for each model
+prob_ord_add = fitted(model_ord_additive, type = "response")
+prob_ord_sec = fitted(model_ord_sec, type = "response")
+prob_ord_third = fitted(model_ord_third, type = "response")
+prob_ord_sat = fitted(model_ord_saturated, type = "response")
+
+predictor_vars = c("Tumor Size", "Number of Tumors", "Age")
+
+models_ord = list(model_ord_additive, model_ord_sec, model_ord_third, 
+              model_ord_saturated)
+model_names_ord = c("Additive Model", "Second-Order Model", "Third-Order Model", 
+                 "Saturated Model")
+  
+# Loop through each predictor variable
+for (var in predictor_vars) {
+  # Loop through each model and its corresponding name
+  for (i in seq_along(models_ord)) {
+    model_ord = models_ord[[i]]  # Get the model object from the list
+    model_name_ord = model_names_ord[i]  # Get the corresponding model name
+    
+    # Obtain predicted log odds from the model for the current predictor
+    predicted_logodds = fitted(model_ord, newdata = data, type = "link")
+    
+    # Create scatterplot of current predictor variable vs. predicted log odds
+    plot(data[[var]], predicted_logodds, xlab = var, 
+         ylab = "Predicted Log Odds", main = paste("Scatterplot of", var, 
+                                                   "vs. Log Odds (", 
+                                                   model_name_ord, ")", 
+                                                   sep = " "))
+    
+    # Add a loess smooth to the scatterplot for visual assessment of linearity
+    lines(lowess(data[[var]], predicted_logodds), col = "red")
+  }
+}
+```
+
+* Linearity holds for the log of tumor size, number of tumors and age.
+
+#### Proportional Odds Assumption
+
+```{r}
+#proportional odds assumption or the parallel regression assumption
+prop_assump = polr(pain_4cate ~ `Tumor Size`+`Number of Tumors`+Age+Sex
+                   +`Cancer Stage`, data = data)
+
+brant(prop_assump)
+```
+
+* Proportional Odds Assumption holds
+
+#### Influential Outliers
+
+```{r}
+ggpairs(data[, c("Tumor Size", "Number of Tumors", "Age")])
+var_box = melt(data[, c("pain_4cate", c("Tumor Size","Number of Tumors","Age"))],
+  id.vars="pain_4cate")
+
+ggplot(var_box, aes(pain_4cate, y = value, fill=pain_4cate)) +
+  geom_boxplot() +
+  facet_wrap(~variable, scales="free_y")
+```
+
+* Although the box plot suggests that there are outliers, given that the sample size is large, we can ignore these outliers as they are not influential.
+
+#### Graphs of Predicted Probabilities
+
+```{r}
+#predicted probabilities for all other variables
+pp = fitted(model_ord_additive, type = "responese")
+data_with_probs = cbind(data, pp)
+
+#Plot the predicted probabilities for Cancer Stage as character
+ggplot(median_iqr_by_stage_pain, aes(x = `Cancer Stage`, y = median_pp, 
+                                     colour = pain_4cate)) + 
+  geom_smooth(method = "loess", se = FALSE, size = 1.25) +
+  labs(x = "Cancer Stage", y = "Predicted Probabilities", 
+       title = "Predicted Probabilities for Cancer Stage",
+       color = "Pain Scale") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "transparent"),
+        plot.title = element_text(hjust = 0.5)) +
+  scale_color_manual(values = c("red4", "yellowgreen", "coral", "red"),
+                     labels = c("None", "Mild", "Moderate", "Severe"))
+
+ggplot(data_with_probs, aes(x = Sex, y = pp, colour = pain_4cate)) +
+  geom_boxplot() +
+  labs(x = "Sex", y = "Predicted Probabilities", 
+       title = "Predicted Probabilities for Sex",
+       color = "Pain Scale") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "transparent"),
+        plot.title = element_text(hjust = 0.5)) +
+  scale_color_manual(values = c("red4", "yellowgreen", "coral", "red"),
+                     labels = c("None", "Mild", "Moderate", "Severe"))
+
+ggplot(data_with_probs, aes(x = `Tumor Size`, y = pp, colour = pain_4cate)) +
+  geom_smooth(method = "loess", se = FALSE, size = 1.25) +
+  labs(x = "Tumor Size", y = "Predicted Probabilities", 
+       title = "Predicted Probabilities for Tumor Size",
+       color = "Pain Scale") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "transparent"),
+        plot.title = element_text(hjust = 0.5)) +
+  scale_color_manual(values = c("red4", "yellowgreen", "coral", "red"),
+                     labels = c("None", "Mild", "Moderate", "Severe"))
+
+ggplot(data_with_probs, aes(x = `Number of Tumors`, y = pp, 
+                            colour = pain_4cate)) +
+  geom_smooth(method = "loess", se = FALSE, size = 1.25) +
+  labs(x = "Number of Tumors", y = "Predicted Probabilities", 
+       title = "Predicted Probabilities for Number of Tumors",
+       color = "Pain Scale") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "transparent"),
+        plot.title = element_text(hjust = 0.5)) +
+  scale_color_manual(values = c("red4", "yellowgreen", "coral", "red"),
+                     labels = c("None", "Mild", "Moderate", "Severe"))
+
+ggplot(data_with_probs, aes(x = `Age`, y = pp, colour = pain_4cate)) +
+  geom_smooth(method = "loess", se = FALSE, size = 1.25) +
+  labs(x = "Age", y = "Predicted Probabilities", 
+       title = "Predicted Probabilities for Age",
+       color = "Pain Scale") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "transparent"),
+        plot.title = element_text(hjust = 0.5)) +
+  scale_color_manual(values = c("red4", "yellowgreen", "coral", "red"),
+                     labels = c("None", "Mild", "Moderate", "Severe"))
+```
+
+### Mixed-Effects Logistic Regression Analysis
+
+#### Model
+
+```{r}
+#Additive model
+model_bin_additive = glmer(bin_pain ~ `Tumor Size`+`Number of Tumors`+Age+Sex+`Cancer Stage`
+                  + (1 | DID), data = data, family = binomial, 
+                  glmerControl(optimizer = "bobyqa", 
+                               optCtrl = list(maxfun = 100000)), nAGQ = 1)
+
+#Second order interaction model
+model_bin_sec = glmer(bin_pain ~ (`Tumor Size`+`Number of Tumors`+Age+Sex+`Cancer Stage`
+                  + (1 | DID))^2, data = data, family = binomial, 
+                  glmerControl(optimizer = "bobyqa", 
+                               optCtrl = list(maxfun = 100000)), nAGQ = 1)
+
+#Third order interaction model
+model_bin_third = glmer(bin_pain ~ (`Tumor Size`+`Number of Tumors`+Age+Sex+`Cancer Stage`
+                  + (1 | DID))^3, data = data, family = binomial, 
+                  glmerControl(optimizer = "bobyqa", 
+                               optCtrl = list(maxfun = 100000)), nAGQ = 1)
+
+#Saturated model
+model_bin_saturated = glmer(bin_pain ~ `Tumor Size`*`Number of Tumors`*Age*Sex*`Cancer Stage` 
+                            + (1|DID), data = data, family = binomial, 
+                  glmerControl(optimizer = "bobyqa", 
+                               optCtrl = list(maxfun = 100000)), nAGQ = 1)
+
+summary(model_bin_additive)
+summary(model_bin_sec)
+summary(model_bin_third)
+summary(model_bin_saturated)
+```
+
+#### Tables for each mixed-effect logistic regression
+
+```{r}
+model_bin_additive %>%
+  tbl_regression(exponentiate = TRUE) %>%
+  bold_labels() %>%
+  italicize_levels() %>%
+  bold_p(t = 0.05)
+
+model_bin_sec %>%
+  tbl_regression(exponentiate = TRUE) %>%
+  bold_labels() %>%
+  italicize_levels() %>%
+  bold_p(t = 0.05)
+
+model_bin_third %>%
+  tbl_regression(exponentiate = TRUE) %>%
+  bold_labels() %>%
+  italicize_levels() %>%
+  bold_p(t = 0.05)
+
+model_bin_saturated %>%
+  tbl_regression(exponentiate = TRUE) %>%
+  bold_labels() %>%
+  italicize_levels() %>%
+  bold_p(t = 0.05)
+```
+
+#### Assumption Check
+
+#### Linearity of Continuous Predictors
+
+```{r}
+#Predict the probability for each model
+prob_bin_add = predict(model_bin_additive, type = "response")
+prob_bin_sec = predict(model_bin_sec, type = "response")
+prob_bin_third = predict(model_bin_third, type = "response")
+prob_bin_sat = predict(model_bin_saturated, type = "response")
+
+predictor_vars = c("Tumor Size", "Number of Tumors", "Age")
+
+models_bin = list(model_bin_additive, model_bin_sec, model_bin_third, 
+              model_bin_saturated)
+model_names_bin = c("Additive Model", "Second-Order Model", "Third-Order Model", 
+                 "Saturated Model")
+  
+# Loop through each predictor variable
+for (var in predictor_vars) {
+  # Loop through each model and its corresponding name
+  for (i in seq_along(models_bin)) {
+    model_bin = models_bin[[i]]  # Get the model object from the list
+    model_name_bin = model_names_bin[i]  # Get the corresponding model name
+    
+    # Obtain predicted log odds from the model for the current predictor
+    predicted_logodds = predict(model_bin, newdata = data, type = "link")
+    
+    # Create scatterplot of current predictor variable vs. predicted log odds
+    plot(data[[var]], predicted_logodds, xlab = var, 
+         ylab = "Predicted Log Odds", main = paste("Scatterplot of", var, 
+                                                   "vs. Log Odds (", 
+                                                   model_name_bin, ")", 
+                                                   sep = " "))
+    
+    # Add a loess smooth to the scatterplot for visual assessment of linearity
+    lines(lowess(data[[var]], predicted_logodds), col = "red")
+  }
+}
+```
+
+* Linearity holds for the log of tumor size, number of tumors and age.
+
+#### Multicolinearity
+
+```{r}
+car::vif(model_bin_additive)
+```
+
+* Since the GVIF are close to 1 it suggests that there is no multicolinearity.
+
+#### Influential Outliers
+
+```{r}
+ggpairs(data[, c("Tumor Size", "Number of Tumors", "Age")])
+var_box = melt(data[, c("bin_pain", c("Tumor Size","Number of Tumors","Age"))],
+  id.vars="bin_pain")
+
+ggplot(var_box, aes(bin_pain, y = value, fill=bin_pain)) +
+  geom_boxplot() +
+  facet_wrap(~variable, scales="free_y")
+```
+
+* Although the box plot suggests that there are outliers, given that the sample size is large, we can ignore these outliers as they are not influential.
+
+#### Normality of Random Effects
+
+```{r}
+#Loop through each model and its corresponding name
+  for (i in seq_along(models_bin)) {
+    model_bin = models_bin[[i]]  # Get the model object from the list
+    model_name_bin = model_names_bin[i]  # Get the corresponding model name
+    
+    # Obtain predicted log odds from the model for the current predictor
+    print(qqmath(ranef(model_bin, condVar = TRUE)))
+  }
+
+#Loop through each model and its corresponding name
+  for (i in seq_along(models_bin)) {
+    model_bin = models_bin[[i]]  # Get the model object from the list
+    model_name_bin = model_names_bin[i]  # Get the corresponding model name
+    
+    # Obtain predicted log odds from the model for the current predictor
+    print(tibble(random_intercept = ranef(model_bin)$DID[[1]]) %>% 
+  ggplot(aes(random_intercept)) + geom_histogram(bins = 30) + 
+      ggtitle(paste("Histogram of Random Intercept for Model", model_name_bin)) +
+      theme(plot.title = element_text(hjust = 0.5, vjust = -1),  # Center and adjust vertical position of the title
+          panel.background = element_rect(fill = "transparent")))  # Remove background
+  }
+```
+
+* The plot for the normality of residuals for random effects suggests normality.
+
+### Model Fit-Analysis for mixed-effects ordinal regression
+
+```{r}
+#likelihood ratio test for mixed-effects ordinal regression
+#additive vs. saturated
+anova(model_ord_additive, model_ord_saturated, test = "LRT")
+#second-order vs. saturated
+anova(model_ord_sec, model_ord_saturated, test = "LRT")
+#third-order vs. saturated
+anova(model_ord_third, model_ord_saturated, test = "LRT")
+
+#deviance for additive model
+dev_add_cat = -2*(model_ord_additive$logLik - model_ord_saturated$logLik)
+print(dev_add_cat)
+
+#deviance for second-order model
+dev_sec_cat = -2*(model_ord_sec$logLik - model_ord_saturated$logLik)
+print(dev_sec_cat)
+
+#deviance for third-order model
+dev_third_cat = -2*(model_ord_third$logLik - model_ord_saturated$logLik)
+print(dev_third_cat)
+```
+
+### Model Fit-Analysis for mixed-effects binomial regression
+
+```{r}
+#likelihood ratio test for mixed-effects binomial regression
+#additive vs. saturated
+anova(model_bin_additive, model_bin_saturated, test = "LRT")
+#second-order vs. saturated
+anova(model_bin_sec, model_bin_saturated, test = "LRT")
+#third-order vs. saturated
+anova(model_bin_third, model_bin_saturated, test = "LRT")
+
+#deviance for additive model
+dev_add_bin = -2*(logLik(model_bin_additive) -logLik(model_bin_saturated))
+print(dev_add_bin)
+
+#deviance for second-order model
+dev_sec_bin = -2*(logLik(model_bin_sec) -logLik(model_bin_saturated)) 
+print(dev_sec_bin)
+
+#deviance for third-order model
+dev_third_bin = -2*(logLik(model_bin_third) -logLik(model_bin_saturated)) 
+print(dev_third_bin)
+```
+
+
+
+
